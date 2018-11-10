@@ -37,6 +37,10 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
+static tid_t dead_tid_list[100];
+
+static int tid_count;
+
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
   {
@@ -92,6 +96,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  tid_count = 0;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -281,6 +286,7 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
+  struct thread* cur = thread_current();
 
 #ifdef USERPROG
   process_exit ();
@@ -289,9 +295,20 @@ thread_exit (void)
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
+  
+  sema_up(&cur->thread_sema);
+
+  dead_tid_list[tid_count%100] = cur->tid;
+  tid_count++;
+
+  sema_down(&cur->thread_sema2);
+  
+
+
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  list_remove (&cur->allelem);
+  cur->status = THREAD_DYING;
+
   schedule ();
   NOT_REACHED ();
 }
@@ -323,8 +340,7 @@ thread_foreach (thread_action_func *func, void *aux)
 
   ASSERT (intr_get_level () == INTR_OFF);
 
-  for (e = list_begin (&all_list); e != list_end (&all_list);
-       e = list_next (e))
+  for (e = list_begin (&all_list); e != list_end (&all_list);e = list_next (e))
     {
       struct thread *t = list_entry (e, struct thread, allelem);
       func (t, aux);
@@ -467,6 +483,13 @@ init_thread (struct thread *t, const char *name, int priority)
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+  
+  //initialzie sema
+  sema_init(&t->thread_sema, 0);
+  sema_init(&t->thread_sema2, 0);
+  lock_init(&t->thread_wait_lock);
+
+  t->thread_exit_status = 0;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -577,6 +600,32 @@ allocate_tid (void)
   lock_release (&tid_lock);
 
   return tid;
+}
+
+//Find thread from all-list
+struct thread*
+thread_find(tid_t tid){
+	struct list_elem *e;
+	struct thread *t;
+
+	for (e = list_begin (&all_list); e != list_end (&all_list);e = list_next (e)) {     
+		t = list_entry (e, struct thread, allelem);
+		if(t->tid == tid){
+			return t;
+		}	
+    	}
+	return NULL;
+}
+
+tid_t
+thread_find_dead(tid_t tid){
+	int i;	
+	for(i=0;i < ((tid_count<100)? tid_count:100); i++){
+		if(dead_tid_list[i]==tid){
+			return -1;
+		}
+	}
+	return 0;
 }
 
 /* Offset of `stack' member within `struct thread'.

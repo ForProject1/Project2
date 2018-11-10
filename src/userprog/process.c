@@ -15,11 +15,14 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+int process_push_argument(char* token, int count, void** esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -29,19 +32,27 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char file_path[128];
   tid_t tid;
+  char *temp;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
+
+
   strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (file_path, fn_copy, 128);
+  strtok_r(file_path, " ", &temp);
+  
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_path, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (fn_copy);
+
   return tid;
 }
 
@@ -51,18 +62,116 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
+  char file_name_copy[128];
+  char *file_path;
+  char *save_ptr;
+  char *token;
   struct intr_frame if_;
   bool success;
+  uint32_t old_esp;
+  int argument_count = 0;
+  int argument_length = 0;
+  int count = 0;
+  int token_length;
+  int total_bytes;
+  void *argv;
+  void **esp;
+  int word_align;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+
+  old_esp = if_.esp;
+  esp = &if_.esp;
+
+
+  strlcpy(file_name_copy, file_name, 128);
+  file_path = strtok_r(file_name_copy, " ", &save_ptr);
+
+
+  success = load(file_path, &if_.eip, &if_.esp);
+
+  if(success) {
+	 token = file_path;
+ 	 while (token != NULL) {
+		  argument_count++;
+		  argument_length += strlen(token) + 1;
+		  token = strtok_r(NULL, " ", &save_ptr);
+	 }
+
+
+	// push 
+	// 6. argv strings
+	// 5. word-align
+	// 4. argv[i]
+	// 3. argv
+	// 2. argc
+	// 1. return address
+
+	// total bytes 
+	// return address 4, argc 4, argv 4, argv (argument count + 1) * 4
+	// word-align (4 - (argument_length % 4)) % 4 , argument_length 
+
+	word_align = (4 - (argument_length % 4)) % 4;
+	total_bytes = 12 + (argument_count+1)*4 + word_align + argument_length;
+
+	*esp -= total_bytes;
+	if (!is_user_vaddr(*esp)){
+		printf("unvalid esp\n");	
+	}
+
+	// return address
+	**(uint32_t **)esp = 0;
+	*esp += 4;
+
+	// argc
+	**(uint32_t **)esp = argument_count;
+	*esp += 4;
+
+	// argv
+	**(uint32_t **)esp = *esp + 4;
+	*esp += 4; 
+	argv = *esp;
+
+	// argv[i]
+	// address pushing in no.5
+	*esp += 4 * argument_count; 
+	**(uint32_t **)esp = 0;
+	*esp += 4;
+
+	// word-align
+	for(count = 0; count < word_align; count++){
+		**(char **)esp = '\0';
+		*esp += 1;
+	}
+
+	//argv[i][ ... ]
+	  
+	strlcpy(file_name_copy, file_name, 128);
+	save_ptr = file_name_copy;
+
+	token = strtok_r(NULL, " ", &save_ptr);
+	
+	while( token != NULL) {
+		strlcpy(*esp, token, strlen(token) + 1);
+		*(uint32_t **)argv=*esp;
+		
+		argv+=4;
+		*esp += strlen(token) + 1;
+		token = strtok_r(NULL, " ", &save_ptr);
+	} 
+  }
+
+  *esp -= total_bytes;
+
+  //hex_dump(*esp, *esp, 100, 1);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
+
   if (!success) 
     thread_exit ();
 
@@ -73,8 +182,11 @@ start_process (void *file_name_)
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
+  printf("esp:%p \n", *esp);
+
   NOT_REACHED ();
 }
+
 
 /* Waits for thread TID to die and returns its exit status.  If
    it was terminated by the kernel (i.e. killed due to an
@@ -86,9 +198,33 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+	struct thread* child;
+	int exit_status = 0;
+
+	child = thread_find(child_tid);
+
+	if(child == NULL){
+		return -1;	
+	}
+	
+	
+	lock_acquire(&child->thread_wait_lock);
+
+	if(thread_find_dead(child_tid) == -1){
+		return -1;
+	}
+
+	//if pid_list exist return -1;
+ 	sema_down(&child->thread_sema);
+	exit_status = child->thread_exit_status;
+ 	sema_up(&child->thread_sema2);
+
+	lock_release(&child->thread_wait_lock);
+	return exit_status;
+
+
 }
 
 /* Free the current process's resources. */
@@ -97,6 +233,8 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
