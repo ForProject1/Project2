@@ -108,6 +108,9 @@ struct thread
 
     struct lock thread_wait_lock;
 
+	int fd_count;
+	struct list fd_list;
+
     int thread_exit_status;
   };
 

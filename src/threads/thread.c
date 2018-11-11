@@ -206,6 +206,7 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+
   return tid;
 }
 
@@ -488,6 +489,10 @@ init_thread (struct thread *t, const char *name, int priority)
   sema_init(&t->thread_sema, 0);
   sema_init(&t->thread_sema2, 0);
   lock_init(&t->thread_wait_lock);
+
+  list_init(&t->fd_list);
+
+  t->fd_count = 0;
 
   t->thread_exit_status = 0;
 }
