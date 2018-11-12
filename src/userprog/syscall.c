@@ -21,11 +21,16 @@ typedef int pid_t;
 struct file_descripter {
 	struct list_elem elem;
 	struct file* file;
+	struct thread *owner;
 	int fd;
 };
 
+static struct list fd_list;
 
-struct semaphore* file_sema;
+static int fd_count;
+
+
+struct semaphore write_lock;
 
 static void syscall_handler (struct intr_frame *);
 
@@ -52,7 +57,9 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  init_sema(&file_sema, 1);
+  sema_init(&write_lock, 1);
+  list_init(&fd_list);
+  fd_count=2;
 }
 
 bool is_valid_addr(void * esp){
@@ -69,8 +76,10 @@ bool is_valid_addr(void * esp){
 	else if((pt = pagedir_get_page (thread_current()->pagedir, esp)) == NULL) 
 		return false;
 
-	else
-		return true;
+	else if((pt = pagedir_get_page (thread_current()->pagedir, esp + 3)) == NULL) 
+		return false;
+
+	else return true;
 }
 
 bool is_valid_filename(const char * file_name){
@@ -246,14 +255,15 @@ int open(const char *file) {
 	struct file_descripter* fd_ptr;
 
 	f = filesys_open(file);
-
 	if (f == NULL ||  !is_valid_filename (file) ){
 		return -1;
 	} else {
+
 		fd_ptr = malloc(sizeof(struct file_descripter));
-		fd_ptr->fd = thread_current()->fd_count++;
+		fd_ptr->fd = fd_count++;
 		fd_ptr->file = f;
-		list_push_back(&thread_current()->fd_list, &fd_ptr->elem);
+		fd_ptr->owner = thread_current();
+		list_push_back(&fd_list, &fd_ptr->elem);
 		return fd_ptr->fd;
 	}
 }
@@ -261,32 +271,46 @@ int open(const char *file) {
 int filesize (int fd) {
 	struct file_descripter* f;
 	f = search_fd(fd);
+	int value;
  
 	if (f == NULL) {
 		return -1;
 	}
 	else {
-		return file_length(f->file);
+		value = file_length(f->file);
+		return value; 
 	}
 }
 
 int read(int fd, void *buffer, unsigned size) {
 	struct file_descripter* f;
+	int value;
+
+	if (fd == 0){
+		input_getc(buffer,size);
+		return size;
+	}
+
 	f = search_fd(fd);
+
 
 	if (f == NULL) {
 		return -1;
 	}
 	else {
-		return file_read(f->file,buffer,size);
+		value = file_read(f->file,buffer,size);
+		return value;
 	}
 }
 
 int write(int fd, const void *buffer, unsigned size){
 	struct file_descripter* f;
+	int value;
 
 	if (fd == 1){
+		sema_down(&write_lock);
 		putbuf(buffer, size);
+		sema_up(&write_lock);
 		return size;
 	}
 
@@ -296,28 +320,63 @@ int write(int fd, const void *buffer, unsigned size){
 		return -1;
 	}
 	else {
-		return file_write(f->file, buffer, size);
+		sema_down(&write_lock);
+		//printf("I try to write %p\n", f->file);
+		value = file_write(f->file, buffer, size);
+		sema_up(&write_lock);
+		
+		
+
+		return value;
 	}
 }
 void seek(int fd, unsigned position) {
 	struct file_descripter* f;
+
 	f = search_fd(fd);
-    file_seek(f->file, position);
+
+	if ( f == NULL)
+		return;
+
+	file_seek(f->file, position);
+	
 }
 
 unsigned tell(int fd) {
 	struct file_descripter* f;
 	f = search_fd(fd);
-	return file_tell(f->file);
+
+	return file_tell(f->file); 
 }
 
 void close(int fd) {
 	struct file_descripter* f;
+	struct list_elem *e;
+	int value = 0;
+
 	if ((f = search_fd(fd))  == NULL)
 		exit(-1);
 	else {
+		//printf("I allow to write %s\n", f->filename);
 		list_remove(&f->elem);
-		file_close(f->file);
+		//printf("file to be closed: %s\n", f->filename);
+		for (e = list_begin(&fd_list); e != list_end(&fd_list); e = list_next(e))
+		{
+			struct file_descripter *fd_ptr = list_entry(e, struct file_descripter, elem);
+
+		//	printf("iterator Filename : %s\n", fd_ptr->filename);
+			if (fd_ptr->file == f->file) {
+				//printf("there's a same file discriptor on the list\n");
+				value=1;
+				break;
+			}
+		}
+		
+		if(!value){
+//			printf("found the same file\n");
+			file_close(f->file);
+		}
+
 		free(f);
 	}
 }
@@ -327,15 +386,11 @@ void close(int fd) {
 struct file_descripter*
 search_fd(int fd) {
 	struct list_elem *e;
-	struct list *fd_list;
 
-	fd_list = &thread_current()->fd_list;
-
-
-	for (e = list_begin(fd_list); e != list_end(fd_list); e = list_next(e))
+	for (e = list_begin(&fd_list); e != list_end(&fd_list); e = list_next(e))
 	{
 		struct file_descripter *fd_ptr = list_entry(e, struct file_descripter, elem);
-		if (fd_ptr->fd == fd) {
+		if (fd_ptr->fd == fd && (thread_current() ==  fd_ptr->owner)) {
 			return fd_ptr;
 		}
 	}

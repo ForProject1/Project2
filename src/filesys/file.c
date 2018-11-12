@@ -119,6 +119,7 @@ void
 file_deny_write (struct file *file) 
 {
   ASSERT (file != NULL);
+
   if (!file->deny_write) 
     {
       file->deny_write = true;
@@ -133,6 +134,7 @@ void
 file_allow_write (struct file *file) 
 {
   ASSERT (file != NULL);
+
   if (file->deny_write) 
     {
       file->deny_write = false;

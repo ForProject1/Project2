@@ -307,11 +307,6 @@ thread_exit (void)
   temp = malloc(sizeof(struct tid_t_dead));
   temp->tid = cur->tid;
   temp->exit_status = cur->thread_exit_status;
-
-  //sema_down(&cur->thread_sema2);
-
-  //printf("exit_sema down after: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
-
   intr_disable ();
   list_remove (&cur->allelem);
   list_push_back(&dead_list, &temp->elem);
@@ -502,9 +497,7 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init(&t->thread_wait_lock);
   sema_init(&t->ready_to_load, 0);
 
-  list_init(&t->fd_list);
-
-  t->fd_count = 2;
+ 
 
   t-> parent_thread = running_thread();
   t->child_load_success = 1;

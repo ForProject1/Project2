@@ -88,6 +88,7 @@ start_process (void *file_name_)
   void *argv;
   void **esp;
   int word_align;
+  struct file* file;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -103,10 +104,14 @@ start_process (void *file_name_)
   file_path = strtok_r(file_name_copy, " ", &save_ptr);
 
 
+
   success = load(file_path, &if_.eip, &if_.esp);
 
 
   if(success) {
+	 file = filesys_open(file_path);
+	 file_deny_write(file);
+
 	 token = file_path;
  	 while (token != NULL) {
 		  argument_count++;
@@ -193,6 +198,8 @@ start_process (void *file_name_)
     thread_exit();
   }
 
+
+
   sema_up(&thread_current()->parent_thread->ready_to_load);
 
   /* Start the user process by simulating a return from an
@@ -230,21 +237,15 @@ process_wait (tid_t child_tid)
 	child = thread_find(child_tid);
 
 
-	// 1. child == null && no dead == -1
 	if(child == NULL){
-
 		if( (exit_status = thread_find_dead(child_tid)) == -1){
-			//printf("case 1\n");
 			lock_release(&thread_current()->thread_wait_lock);		
 			return -1;	
 		} else {
-			//printf("case 2\n");
 			lock_release(&thread_current()->thread_wait_lock);
 			return exit_status;
 		}
 	} else {
-	// 3. child != null
-		//printf("case 3\n");
  		sema_down(&child->thread_sema);
 		exit_status = child->thread_exit_status;
  		sema_up(&child->thread_sema2);
@@ -381,19 +382,22 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+
+
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
 
+	
   /* Open executable file. */
   file = filesys_open (file_name);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
       goto done; 
-    }
+    }	
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -407,6 +411,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
+
+//  t->file = file;
+//  printf("name : %s\n",t->name);
+
+
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
