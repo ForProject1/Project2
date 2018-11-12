@@ -26,11 +26,6 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 int process_push_argument(char* token, int count, void** esp);
 
 
-static struct list file_list;
-
-
-
-
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -57,8 +52,17 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_path, PRI_DEFAULT, start_process, fn_copy);
+  
+  sema_down(&thread_current()->ready_to_load);
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
+
+  if(thread_current()->child_load_success == -1)
+	tid = TID_ERROR;
+  else
+	thread_current()->child_load_success = 1;	
+
 
   return tid;
 }
@@ -100,6 +104,7 @@ start_process (void *file_name_)
 
 
   success = load(file_path, &if_.eip, &if_.esp);
+
 
   if(success) {
 	 token = file_path;
@@ -170,17 +175,25 @@ start_process (void *file_name_)
 		*esp += strlen(token) + 1;
 		token = strtok_r(NULL, " ", &save_ptr);
 	} 
+
+	*esp -= total_bytes;
   }
 
-  *esp -= total_bytes;
+  
 
   //hex_dump(*esp, *esp, 100, 1);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
 
-  if (!success) 
-    thread_exit ();
+
+  if (!success) {
+    thread_current()->parent_thread->child_load_success = TID_ERROR;
+    sema_up(&thread_current()->parent_thread->ready_to_load);
+    thread_exit();
+  }
+
+  sema_up(&thread_current()->parent_thread->ready_to_load);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -189,7 +202,6 @@ start_process (void *file_name_)
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
-  printf("esp:%p \n", *esp);
 
   NOT_REACHED ();
 }
@@ -209,27 +221,36 @@ process_wait (tid_t child_tid)
 {
 	struct thread* child;
 	int exit_status = 0;
+	//printf("wait for tid:%d\n", child_tid);
+
+	
+	//printf("acquire: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
+	lock_acquire(&thread_current()->thread_wait_lock);
 
 	child = thread_find(child_tid);
 
+
+	// 1. child == null && no dead == -1
 	if(child == NULL){
-		return -1;	
+
+		if( (exit_status = thread_find_dead(child_tid)) == -1){
+			//printf("case 1\n");
+			lock_release(&thread_current()->thread_wait_lock);		
+			return -1;	
+		} else {
+			//printf("case 2\n");
+			lock_release(&thread_current()->thread_wait_lock);
+			return exit_status;
+		}
+	} else {
+	// 3. child != null
+		//printf("case 3\n");
+ 		sema_down(&child->thread_sema);
+		exit_status = child->thread_exit_status;
+ 		sema_up(&child->thread_sema2);
+		lock_release(&thread_current()->thread_wait_lock);
+		return exit_status;
 	}
-	
-	
-	lock_acquire(&child->thread_wait_lock);
-
-	if(thread_find_dead(child_tid) == -1){
-		return -1;
-	}
-
-	//if pid_list exist return -1;
- 	sema_down(&child->thread_sema);
-	exit_status = child->thread_exit_status;
- 	sema_up(&child->thread_sema2);
-
-	lock_release(&child->thread_wait_lock);
-	return exit_status;
 
 
 }

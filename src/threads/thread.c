@@ -37,9 +37,13 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
-static tid_t dead_tid_list[100];
+static struct list dead_list;
 
-static int tid_count;
+struct tid_t_dead {
+	tid_t tid;
+	int exit_status;
+	struct list_elem elem;
+};
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -96,7 +100,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-  tid_count = 0;
+  list_init (&dead_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -206,7 +210,6 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
-
   return tid;
 }
 
@@ -288,6 +291,7 @@ thread_exit (void)
 {
   ASSERT (!intr_context ());
   struct thread* cur = thread_current();
+  struct tid_t_dead* temp;
 
 #ifdef USERPROG
   process_exit ();
@@ -296,21 +300,28 @@ thread_exit (void)
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
-  
+  //printf("exit_sema up before: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
   sema_up(&cur->thread_sema);
+  // cur->parent_thread->thread_sema
+   //printf("exit_sema up after: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
+  temp = malloc(sizeof(struct tid_t_dead));
+  temp->tid = cur->tid;
+  temp->exit_status = cur->thread_exit_status;
 
-  dead_tid_list[tid_count%100] = cur->tid;
-  tid_count++;
+  //sema_down(&cur->thread_sema2);
 
-  sema_down(&cur->thread_sema2);
-  
-
+  //printf("exit_sema down after: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
 
   intr_disable ();
   list_remove (&cur->allelem);
+  list_push_back(&dead_list, &temp->elem);
+  sema_down(&cur->thread_sema2);  
+
   cur->status = THREAD_DYING;
+  //sema_down(&cur->thread_sema2);
 
   schedule ();
+  
   NOT_REACHED ();
 }
 
@@ -489,10 +500,14 @@ init_thread (struct thread *t, const char *name, int priority)
   sema_init(&t->thread_sema, 0);
   sema_init(&t->thread_sema2, 0);
   lock_init(&t->thread_wait_lock);
+  sema_init(&t->ready_to_load, 0);
 
   list_init(&t->fd_list);
 
-  t->fd_count = 0;
+  t->fd_count = 2;
+
+  t-> parent_thread = running_thread();
+  t->child_load_success = 1;
 
   t->thread_exit_status = 0;
 }
@@ -615,7 +630,7 @@ thread_find(tid_t tid){
 
 	for (e = list_begin (&all_list); e != list_end (&all_list);e = list_next (e)) {     
 		t = list_entry (e, struct thread, allelem);
-		if(t->tid == tid){
+		if(t->tid == tid ){
 			return t;
 		}	
     	}
@@ -624,13 +639,19 @@ thread_find(tid_t tid){
 
 tid_t
 thread_find_dead(tid_t tid){
-	int i;	
-	for(i=0;i < ((tid_count<100)? tid_count:100); i++){
-		if(dead_tid_list[i]==tid){
-			return -1;
-		}
-	}
-	return 0;
+	struct list_elem* e;
+	struct tid_t_dead* t;
+	int temp;
+
+	for (e = list_begin (&dead_list); e != list_end (&dead_list); e = list_next (e)) {     
+		t = list_entry (e, struct tid_t_dead, elem);
+		if(t->tid == tid){
+			temp = t->exit_status;
+			t->exit_status = -1;
+			return temp;
+		}	
+    	}
+	return -1;
 }
 
 /* Offset of `stack' member within `struct thread'.

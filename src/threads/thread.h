@@ -108,8 +108,15 @@ struct thread
 
     struct lock thread_wait_lock;
 
-	int fd_count;
-	struct list fd_list;
+    struct semaphore ready_to_load;
+
+    int fd_count;
+
+    struct list fd_list;
+
+    struct thread* parent_thread;
+
+    tid_t child_load_success;
 
     int thread_exit_status;
   };
