@@ -115,6 +115,10 @@ struct thread
     tid_t child_load_success;
 
     int thread_exit_status;
+
+    struct list fd_list;
+
+    int fd_count;
  
   };
 
@@ -154,5 +158,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+struct thread* thread_find_child(tid_t tid);
 
 #endif /* threads/thread.h */

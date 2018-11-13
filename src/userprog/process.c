@@ -234,7 +234,7 @@ process_wait (tid_t child_tid)
 	//printf("acquire: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
 	lock_acquire(&thread_current()->thread_wait_lock);
 
-	child = thread_find(child_tid);
+	child = thread_find_child(child_tid);
 
 
 	if(child == NULL){

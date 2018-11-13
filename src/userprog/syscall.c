@@ -12,6 +12,8 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "userprog/pagedir.h"
+#include "devices/input.h"
+
 
 typedef int pid_t;
 #define PID_ERROR ((pid_t) -1)
@@ -21,13 +23,9 @@ typedef int pid_t;
 struct file_descripter {
 	struct list_elem elem;
 	struct file* file;
-	struct thread *owner;
 	int fd;
 };
 
-static struct list fd_list;
-
-static int fd_count;
 
 
 struct semaphore write_lock;
@@ -58,8 +56,6 @@ syscall_init (void)
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
   sema_init(&write_lock, 1);
-  list_init(&fd_list);
-  fd_count=2;
 }
 
 bool is_valid_addr(void * esp){
@@ -121,6 +117,7 @@ syscall_handler (struct intr_frame *f UNUSED)
 			exit(-1);
 
 		f->eax = exec(*(uint32_t *)(f->esp + 4));
+
 		break;
 
 	case SYS_WAIT:
@@ -253,6 +250,11 @@ bool remove(const char *file) {
 int open(const char *file) {
 	struct file* f;
 	struct file_descripter* fd_ptr;
+	struct file_descripter* fd_ptr2;
+
+
+	struct list_elem *e;
+
 
 	f = filesys_open(file);
 	if (f == NULL ||  !is_valid_filename (file) ){
@@ -260,10 +262,9 @@ int open(const char *file) {
 	} else {
 
 		fd_ptr = malloc(sizeof(struct file_descripter));
-		fd_ptr->fd = fd_count++;
+		fd_ptr->fd = thread_current()->fd_count++;
 		fd_ptr->file = f;
-		fd_ptr->owner = thread_current();
-		list_push_back(&fd_list, &fd_ptr->elem);
+		list_push_back(&thread_current()->fd_list, &fd_ptr->elem);
 		return fd_ptr->fd;
 	}
 }
@@ -284,10 +285,14 @@ int filesize (int fd) {
 
 int read(int fd, void *buffer, unsigned size) {
 	struct file_descripter* f;
+	uint8_t* temp = buffer;
 	int value;
+	int i;
 
 	if (fd == 0){
-		input_getc(buffer,size);
+		for(i=0;i<size;i++){		
+			temp[i] = input_getc();
+		}
 		return size;
 	}
 
@@ -321,7 +326,7 @@ int write(int fd, const void *buffer, unsigned size){
 	}
 	else {
 		sema_down(&write_lock);
-		//printf("I try to write %p\n", f->file);
+
 		value = file_write(f->file, buffer, size);
 		sema_up(&write_lock);
 		
@@ -351,32 +356,45 @@ unsigned tell(int fd) {
 
 void close(int fd) {
 	struct file_descripter* f;
+	struct thread* parent = thread_current()->parent_thread;
 	struct list_elem *e;
-	int value = 0;
 
-	if ((f = search_fd(fd))  == NULL)
+	struct inode* parent_inode;
+	struct inode* child_inode;
+	
+	int is_opend_already = 0;
+
+	if ((f = search_fd(fd))  == NULL){
 		exit(-1);
+	}
 	else {
-		//printf("I allow to write %s\n", f->filename);
-		list_remove(&f->elem);
-		//printf("file to be closed: %s\n", f->filename);
-		for (e = list_begin(&fd_list); e != list_end(&fd_list); e = list_next(e))
-		{
+		child_inode = file_get_inode (f->file);
+		for (e = list_begin(&parent->fd_list); e != list_end(&parent->fd_list); e = list_next(e)) {
 			struct file_descripter *fd_ptr = list_entry(e, struct file_descripter, elem);
-
-		//	printf("iterator Filename : %s\n", fd_ptr->filename);
-			if (fd_ptr->file == f->file) {
-				//printf("there's a same file discriptor on the list\n");
-				value=1;
+			parent_inode = file_get_inode (fd_ptr->file);
+			if (parent_inode == child_inode) {
+				printf("found same file\n");
+				is_opend_already = 1;
 				break;
 			}
 		}
-		
-		if(!value){
-//			printf("found the same file\n");
+		list_remove(&f->elem);
+		if(!is_opend_already)
 			file_close(f->file);
-		}
+		free(f);
+	}
+}
 
+void close_all_file() {
+	struct file_descripter* f;
+	struct list_elem *e;
+	struct thread* cur = thread_current();
+
+	for (e = list_begin(&cur->fd_list); e != list_end(&cur->fd_list); e = list_next(e))
+	{
+		struct file_descripter *fd_ptr = list_entry(e, struct file_descripter, elem);
+		file_close(f->file);
+		list_remove(&f->elem);
 		free(f);
 	}
 }
@@ -386,11 +404,11 @@ void close(int fd) {
 struct file_descripter*
 search_fd(int fd) {
 	struct list_elem *e;
-
-	for (e = list_begin(&fd_list); e != list_end(&fd_list); e = list_next(e))
+	struct thread* cur = thread_current();
+	for (e = list_begin(&cur->fd_list); e != list_end(&cur->fd_list); e = list_next(e))
 	{
 		struct file_descripter *fd_ptr = list_entry(e, struct file_descripter, elem);
-		if (fd_ptr->fd == fd && (thread_current() ==  fd_ptr->owner)) {
+		if (fd_ptr->fd == fd) {
 			return fd_ptr;
 		}
 	}

@@ -39,6 +39,7 @@ static struct lock tid_lock;
 
 static struct list dead_list;
 
+
 struct tid_t_dead {
 	tid_t tid;
 	int exit_status;
@@ -310,8 +311,10 @@ thread_exit (void)
   intr_disable ();
   list_remove (&cur->allelem);
   list_push_back(&dead_list, &temp->elem);
-  sema_down(&cur->thread_sema2);  
 
+
+
+  sema_down(&cur->thread_sema2);  
   cur->status = THREAD_DYING;
   //sema_down(&cur->thread_sema2);
 
@@ -497,6 +500,9 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init(&t->thread_wait_lock);
   sema_init(&t->ready_to_load, 0);
 
+
+  list_init(&t->fd_list);
+  t->fd_count=2;
  
 
   t-> parent_thread = running_thread();
@@ -617,13 +623,13 @@ allocate_tid (void)
 
 //Find thread from all-list
 struct thread*
-thread_find(tid_t tid){
+thread_find_child(tid_t tid){
 	struct list_elem *e;
 	struct thread *t;
 
 	for (e = list_begin (&all_list); e != list_end (&all_list);e = list_next (e)) {     
 		t = list_entry (e, struct thread, allelem);
-		if(t->tid == tid ){
+		if(t->tid == tid && (t->parent_thread == thread_current()) ){
 			return t;
 		}	
     	}
