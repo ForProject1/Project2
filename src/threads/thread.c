@@ -37,13 +37,6 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
-static struct list dead_list;
-
-struct tid_t_dead {
-	tid_t tid;
-	int exit_status;
-	struct list_elem elem;
-};
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -100,7 +93,6 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-  list_init (&dead_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -309,9 +301,12 @@ thread_exit (void)
   temp->exit_status = cur->thread_exit_status;
   intr_disable ();
   list_remove (&cur->allelem);
-  list_push_back(&dead_list, &temp->elem);
-  sema_down(&cur->thread_sema2);  
+  list_push_back(&cur->parent_thread->dead_list, &temp->elem);
+  
+  file_close(cur->own_code);
+  //free_all_fd(); 
 
+  sema_down(&cur->thread_sema2);  
   cur->status = THREAD_DYING;
   //sema_down(&cur->thread_sema2);
 
@@ -497,11 +492,15 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init(&t->thread_wait_lock);
   sema_init(&t->ready_to_load, 0);
 
- 
 
+  list_init(&t->fd_list);
+  list_init (&t->dead_list);
+
+  t->fd_count=2;
+  t->own_code = NULL;
   t-> parent_thread = running_thread();
-  t->child_load_success = 1;
 
+  t->child_load_success = 1;
   t->thread_exit_status = 0;
 }
 
@@ -617,13 +616,13 @@ allocate_tid (void)
 
 //Find thread from all-list
 struct thread*
-thread_find(tid_t tid){
+thread_find_child(tid_t tid){
 	struct list_elem *e;
 	struct thread *t;
 
 	for (e = list_begin (&all_list); e != list_end (&all_list);e = list_next (e)) {     
 		t = list_entry (e, struct thread, allelem);
-		if(t->tid == tid ){
+		if(t->tid == tid && (t->parent_thread == thread_current()) ){
 			return t;
 		}	
     	}
@@ -634,17 +633,27 @@ tid_t
 thread_find_dead(tid_t tid){
 	struct list_elem* e;
 	struct tid_t_dead* t;
+	struct thread* cur;
+
 	int temp;
 
-	for (e = list_begin (&dead_list); e != list_end (&dead_list); e = list_next (e)) {     
+	
+	cur = thread_current();
+
+
+	for (e = list_begin (&cur->dead_list); e != list_end (&cur->dead_list); e = list_next (e)) {     
 		t = list_entry (e, struct tid_t_dead, elem);
 		if(t->tid == tid){
 			temp = t->exit_status;
-			t->exit_status = -1;
+
+			list_remove(e);
+			free(t);
+
 			return temp;
 		}	
     	}
 	return -1;
+
 }
 
 /* Offset of `stack' member within `struct thread'.

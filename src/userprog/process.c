@@ -110,6 +110,7 @@ start_process (void *file_name_)
 
   if(success) {
 	 file = filesys_open(file_path);
+	 thread_current()->own_code = file;
 	 file_deny_write(file);
 
 	 token = file_path;
@@ -234,7 +235,7 @@ process_wait (tid_t child_tid)
 	//printf("acquire: %s, tid :%d\n",thread_current()->name,thread_current()->tid);
 	lock_acquire(&thread_current()->thread_wait_lock);
 
-	child = thread_find(child_tid);
+	child = thread_find_child(child_tid);
 
 
 	if(child == NULL){
