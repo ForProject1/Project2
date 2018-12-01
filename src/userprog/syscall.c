@@ -260,6 +260,7 @@ int open(const char *file) {
 
 	f = filesys_open(file);
 	if (f == NULL ||  !is_valid_filename (file) ){
+		filesys_close(file);
 		return -1;
 	} else {
 
